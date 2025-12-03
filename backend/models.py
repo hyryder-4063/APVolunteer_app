@@ -1,14 +1,25 @@
+from sqlalchemy import ForeignKey
 from sqlmodel import SQLModel, Field
 from typing import Optional
 from datetime import date
 
 
+
+class BookTitle(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str = Field(unique=True)
+    category: str = "Unknown"
+
+class BookBatch(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    book_title: str = Field(foreign_key="booktitle.title")
+    MRP: float
+    entrydate: date = Field(default=date.today())
+
 class BookInventory(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    title: str
-    category: str
-    MRP: float
-    entrydate: date
+    batch_id: int = Field(foreign_key="bookbatch.id")
+    title: str = Field(foreign_key=  "booktitle.title")
     status: str = Field(default="Unsold")
     assigned_volunteer_id: Optional[int] = Field(default=None, foreign_key="volunteers.id")
     sold_date: Optional[date] = None

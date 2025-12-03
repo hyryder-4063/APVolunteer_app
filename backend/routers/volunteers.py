@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import Select, select
 from backend.database import engine
 from backend.models import Volunteers
 from datetime import date
 from pydantic import BaseModel
+from sqlmodel import Session, select
 
 router = APIRouter(prefix="/volunteers")
 
@@ -38,3 +39,14 @@ def make_volunteer_lead(volunteer_id: int):
         session.refresh(vol)
 
     return {"message": f"Volunteer {vol.vol_name} (ID {vol.id}) is now a Lead Volunteer"}
+
+#API: Get leads list
+@router.get("/list-leads")
+def list_volunteer_leads():
+    with (Session(engine) as session):
+        leads = session.exec(
+            select(Volunteers).where(Volunteers.is_lead == True)
+        ).all()
+        return [{"id": v.id,"vol_name": v.vol_name} for v in leads]
+
+

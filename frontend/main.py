@@ -13,7 +13,8 @@ menu = [
     "Home",
     "Add Volunteer",
     "Make Volunteer Lead",
-    "Add Book",
+    "Add New Book Title",
+    "Add Books To Inventory",
     "Assign Books",
     "Add/Close Stall",
     "Stall Performance",
@@ -61,91 +62,345 @@ elif choice == "Make Volunteer Lead":
         except Exception as e:
             st.error(f"Request failed: {e}")
 
-# ----- ADD BOOK -----
-elif choice == "Add Book":
-    st.subheader("Add New Book")
-    title = st.text_input("Book Title")
-    units = st.number_input("Number of Copies", min_value=1, step=1)
-    mrp = st.number_input("MRP", min_value=0.0, step=1.0)
+elif choice == "Add New Book Title":
+    st.subheader("Create a New Book Title")
 
-    if st.button("Add Book"):
+    new_title = st.text_input("Book Title")
+    category = st.text_input("Category")
+
+    if st.button("Create Title"):
+        if not new_title or not category:
+            st.warning("Title and Category are required!")
+        else:
+            data = {"title": new_title, "category": category}
+            try:
+                response = requests.post(f"{API_URL}/books/add-new-title", json=data)
+                if response.status_code == 200:
+                    st.success(f"Title '{new_title}' added successfully!")
+                else:
+                    st.error(response.json())
+            except Exception as e:
+                st.error(f"Request failed: {e}")
+
+
+
+elif choice == "Add Books To Inventory":
+    st.subheader("Add Books To Inventory")
+
+    # Fetch existing titles
+    try:
+        response = requests.get(f"{API_URL}/books/list-titles")
+        titles = response.json() if response.status_code == 200 else []
+    except:
+        titles = []
+
+    if not titles:
+        st.info("No titles found. Add a title first.")
+        st.stop()
+
+    # 1️⃣ Select Title
+    title = st.selectbox("Select Book Title", titles)
+
+    # 2️⃣ Fetch existing batches for selected title
+    try:
+        resp = requests.get(f"{API_URL}/books/list-batches", params={"title": title})
+        batches = resp.json() if resp.status_code == 200 else []
+    except:
+        batches = []
+
+    batch_options = ["New Batch"] + [
+        f"Batch {b['id']} | MRP: {b['MRP']} | Date: {b['entrydate']}"
+        for b in batches
+    ]
+
+    selected_batch = st.selectbox("Select Batch", batch_options)
+
+    # Parse batch selection
+    if selected_batch == "New Batch":
+        batch_id = None
+        mrp = st.number_input("MRP (for new batch)", min_value=1.0, step=1.0)
+        entrydate = st.date_input("Entry Date", date.today())
+    else:
+        # Extract batch_id
+        batch_id = int(selected_batch.split()[1])
+
+        # Get batch details
+        batch_data = next(b for b in batches if b["id"] == batch_id)
+
+        mrp = batch_data["MRP"]
+
+        # Auto-lock entrydate to backend value
+        entrydate = st.date_input(
+            "Entry Date (auto-filled for existing batch)",
+            date.fromisoformat(batch_data["entrydate"]),
+            disabled=True
+        )
+
+    # Units
+    units = st.number_input("Number of Copies", min_value=1, step=1)
+
+    # Submit
+    if st.button("Add Copies to Inventory"):
+        payload = {
+            "title": title,
+            "units": units,
+            "batch_id": batch_id,
+            "MRP": mrp,
+            "entrydate": entrydate.isoformat()
+        }
+
         try:
-            data = {"title": title, "units": units, "MRP": mrp}
-            response = requests.post(f"{API_URL}/books/add-book", json=data)
-            if response.status_code == 200:
-                st.success(f"{units} copies of '{title}' added!")
-                st.json(response.json())
+            resp = requests.post(f"{API_URL}/books/add-book", json=payload)
+            if resp.status_code == 200:
+                st.success(f"Added {units} copies to inventory!")
+                st.json(resp.json())
             else:
-                st.error(f"Error: {response.json()}")
+                st.error(resp.json())
         except Exception as e:
             st.error(f"Request failed: {e}")
+
 
 # ----- ASSIGN BOOKS -----
 elif choice == "Assign Books":
     st.subheader("Assign Books to Lead Volunteer")
-    volunteer_id = st.number_input("Lead Volunteer ID", min_value=1, step=1)
-    book_title = st.text_input("Book Title")
-    units = st.number_input("Number of Copies", min_value=1, step=1)
 
-    if st.button("Assign Books"):
+    # Fetch lead volunteers from backend
+    try:
+        response = requests.get(f"{API_URL}/volunteers/list-leads")
+        if response.status_code == 200:
+            leads = response.json()  # List of dicts [{id, vol_name}, ...]
+            # map display label -> id
+            lead_dict = {f"{v['vol_name']} (ID: {v['id']})": v['id'] for v in leads}
+        else:
+            lead_dict = {}
+            st.error("Failed to fetch lead volunteers from server.")
+    except Exception as e:
+        lead_dict = {}
+        st.error(f"Error fetching lead volunteers: {e}")
+
+    if not lead_dict:
+        st.warning("No lead volunteers found. Mark a volunteer as lead first.")
+    else:
+        # selectbox shows labels, we then look up numeric id
+        selected_label = st.selectbox(
+            "Select Lead Volunteer",
+            list(lead_dict.keys()),
+            key="assign_lead_select"
+        )
+        selected_volunteer_id = lead_dict.get(selected_label)
+
+        # ----------------------------------------------
+        # FETCH UNSOLD BOOK INVENTORY
+        # ----------------------------------------------
         try:
-            data = {"volunteer_id": volunteer_id, "book_title": book_title, "units": units}
-            response = requests.post(f"{API_URL}/books/assign-books", json=data)
-            if response.status_code == 200:
-                st.success(f"{units} copies of '{book_title}' assigned to volunteer {volunteer_id}")
-                st.json(response.json())
+            inv_resp = requests.get(f"{API_URL}/books/unsold_inventory")
+            if inv_resp.status_code == 200:
+                unsold_inventory = inv_resp.json()   # { "Truth": 12, "Karma": 4, ... }
             else:
-                st.error(f"Error: {response.json()}")
+                unsold_inventory = {}
+                st.error("Failed to fetch inventory.")
         except Exception as e:
-            st.error(f"Request failed: {e}")
+            unsold_inventory = {}
+            st.error(f"Error fetching inventory: {e}")
 
-# ------------------ Add/Close Stall ------------------
+        if not unsold_inventory:
+            st.warning("No unsold books available in inventory.")
+        else:
+            # ----------------------------------------------
+            # TITLE DROPDOWN
+            # ----------------------------------------------
+            book_title = st.selectbox(
+                "Select Book Title",
+                list(unsold_inventory.keys()),
+                key="assign_title"
+            )
+
+            # Show available stock for that title
+            available_units = unsold_inventory.get(book_title, 0)
+            st.info(f"Available Copies in Inventory: **{available_units}**")
+
+            # ----------------------------------------------
+            # UNITS INPUT (LIMITED BY AVAILABLE UNITS)
+            # ----------------------------------------------
+            units = st.number_input(
+                "Number of Copies to Assign",
+                min_value=1,
+                max_value=available_units,
+                step=1,
+                key="assign_units"
+            )
+
+            # ----------------------------------------------
+            # SUBMIT ASSIGNMENT
+            # ----------------------------------------------
+            if st.button("Assign Books", key="assign_books_btn"):
+                if selected_volunteer_id is None:
+                    st.error("Please select a lead volunteer.")
+                else:
+                    try:
+                        payload = {
+                            "volunteer_id": selected_volunteer_id,   # <-- numeric ID
+                            "book_title": book_title,
+                            "units": units
+                        }
+                        resp = requests.post(f"{API_URL}/books/assign-books", json=payload)
+
+                        if resp.status_code == 200:
+                            st.success(f"{units} copies of '{book_title}' assigned to volunteer ID {selected_volunteer_id}")
+                            st.json(resp.json())
+                        else:
+                            # backend returns JSON detail; show it
+                            try:
+                                st.error(resp.json())
+                            except:
+                                st.error(f"Error: status {resp.status_code}")
+                    except Exception as e:
+                        st.error(f"Request failed: {e}")
+
+
+
+# ----- Add/Close Stall -----
 elif choice == "Add/Close Stall":
     st.subheader("Add and Close a Stall")
     stall_location = st.text_input("Stall Location")
     stall_date = st.date_input("Stall Date", date.today())
+
+
     volunteer_ids = st.text_area("Volunteer IDs (comma separated)").split(",")
     volunteer_ids = [int(v.strip()) for v in volunteer_ids if v.strip().isdigit()]
     volunteer_lead_id = st.number_input("Lead Volunteer ID", min_value=1, step=1)
 
-    st.write("Enter Sold Books (Book ID : Selling Price) comma separated, e.g. 1:250,2:300")
-    sold_books_input = st.text_area("Sold Books")
-    sold_books = []
-    for item in sold_books_input.split(","):
-        if ":" in item:
-            bid, price = item.split(":")
-            if bid.strip().isdigit() and price.strip().replace(".", "").isdigit():
-                sold_books.append({"book_id": int(bid.strip()), "book_selling_price": float(price.strip())})
-
-    if st.button("Add and Close Stall"):
-        payload = {
-            "stall_location": stall_location,
-            "stall_date": stall_date.isoformat(),
-            "volunteer_ids": volunteer_ids,
-            "volunteer_lead_id": volunteer_lead_id,
-            "sold_books": sold_books
-        }
-        response = requests.post(f"{API_URL}/stalls/add-close-stall", json=payload)
+    # Fetch assigned books
+    try:
+        response = requests.get(
+            f"{API_URL}/books/assigned_books",
+            params={"volunteer_id": volunteer_lead_id}
+        )
         if response.status_code == 200:
-            st.success("Stall added and closed successfully!")
-            st.json(response.json())
+            assigned_books = response.json()  # dict {id: title}
         else:
-            st.error(response.json())
+            assigned_books = {}
+            st.warning("No assigned books found.")
+    except Exception as e:
+        assigned_books = {}
+        st.error(f"Error fetching books: {e}")
 
-# ----- STALL PERFORMANCE -----
-elif choice == "Stall Performance":
-    st.subheader("View Stall Performance")
-    stall_id = st.number_input("Stall ID", min_value=1, step=1)
+    st.write("---")
 
-    if st.button("Get Performance"):
-        try:
-            response = requests.get(f"{API_URL}/stalls/stall-performance", params={"stall_id": stall_id})
-            if response.status_code == 200:
-                st.json(response.json())
+    # -------------------------
+    # FILTER BY TITLE
+    # -------------------------
+    st.subheader("Enter Sold Books")
+
+    # -------------------------
+    # GET ASSIGNED BOOKS
+    # -------------------------
+    try:
+        response = requests.get(
+            f"{API_URL}/books/assigned_books",
+            params={"volunteer_id": volunteer_lead_id}
+        )
+        assigned_books = response.json() if response.status_code == 200 else {}
+    except:
+        assigned_books = {}
+
+    # assigned_books = {book_id: title}  <-- your backend structure
+
+    if not assigned_books:
+        st.warning("No books assigned to this lead volunteer.")
+    else:
+        # -------------------------
+        # UNIQUE TITLES FOR DROPDOWN
+        # -------------------------
+        all_titles = list(sorted(set(assigned_books.values())))
+
+        selected_title = st.selectbox(
+            "Choose Book Title",
+            all_titles,
+            key="title_dropdown"
+        )
+
+        # -------------------------
+        # FILTER BOOKS BY SELECTED TITLE
+        # -------------------------
+        filtered_books = {
+            bid: title for bid, title in assigned_books.items()
+            if title == selected_title
+        }
+
+        if not filtered_books:
+            st.warning(f"No copies of '{selected_title}' are assigned to you.")
+            selected_book_id = None
+            selling_price = 0
+        else:
+            # -------------------------
+            # BOOK ID DROPDOWN (only IDs of that title)
+            # -------------------------
+            selected_book_id = st.selectbox(
+                "Select Book ID",
+                list(filtered_books.keys()),
+                format_func=lambda x: f"{x} — {filtered_books[x]}",
+                key="filtered_book_select"
+            )
+
+            selling_price = st.number_input(
+                "Selling Price",
+                min_value=0.0,
+                step=1.0,
+                key="selling_price"
+            )
+
+        # -------------------------
+        # SESSION STATE FOR SOLD BOOKS
+        # -------------------------
+        if "sold_books" not in st.session_state:
+            st.session_state.sold_books = []
+
+        if st.button("Add Book to Sold List"):
+            if selected_book_id and selling_price > 0:
+                st.session_state.sold_books.append({
+                    "book_id": selected_book_id,
+                    "book_selling_price": selling_price,
+                    "title": assigned_books[selected_book_id]
+                })
             else:
-                st.error(f"Error: {response.json()}")
-        except Exception as e:
-            st.error(f"Request failed: {e}")
+                st.warning("Select a book and enter a valid selling price.")
+
+        # -------------------------
+        # DISPLAY LIST OF SOLD BOOKS
+        # -------------------------
+        if st.session_state.sold_books:
+            st.write("### Books Marked as Sold")
+            st.table(st.session_state.sold_books)
+
+    # -------------------------
+    # Submit & Close Stall
+    # -------------------------
+    if st.button("Close Stall"):
+        if not st.session_state.sold_books:
+            st.warning("Add at least one sold book before closing the stall.")
+        else:
+            payload = {
+                "stall_location": stall_location,
+                "stall_date": stall_date.isoformat(),
+                "volunteer_ids": volunteer_ids,
+                "volunteer_lead_id": volunteer_lead_id,
+                "sold_books": [
+                    {"book_id": x["book_id"], "book_selling_price": x["book_selling_price"]}
+                    for x in st.session_state.sold_books
+                ]
+            }
+            try:
+                res = requests.post(f"{API_URL}/stalls/add-close-stall", json=payload)
+                if res.status_code == 200:
+                    st.success("Stall closed successfully!")
+                    st.json(res.json())
+                    st.session_state.sold_books = []  # reset
+                else:
+                    st.error(res.json())
+            except Exception as e:
+                st.error(f"Error submitting: {e}")
+
 
 # ----- INVENTORY SUMMARY -----
 elif choice == "Inventory Summary":
@@ -153,7 +408,16 @@ elif choice == "Inventory Summary":
     try:
         response = requests.get(f"{API_URL}/reports/inventory_summary")
         if response.status_code == 200:
-            st.json(response.json())
+            inv = response.json()
+            table_data = []
+            for title, counts in inv.items():
+                table_data.append({
+                    "Title": title,
+                    "Unsold": counts.get("Unsold", 0),
+                    "Assigned": counts.get("Assigned", 0),
+                    "Sold": counts.get("Sold", 0)
+                })
+            st.table(table_data)
         else:
             st.error(f"Error: {response.json()}")
     except Exception as e:
@@ -162,7 +426,6 @@ elif choice == "Inventory Summary":
 # ----- ADMIN MONTHLY DASHBOARD -----
 elif choice == "Admin Monthly Dashboard":
     st.subheader("Admin Monthly Dashboard")
-
 
     # Default to current month
     today = date.today()
