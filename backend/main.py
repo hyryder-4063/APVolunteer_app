@@ -34,8 +34,9 @@ app = FastAPI(
 # -------------------------------
 # Include Routers
 # -------------------------------
-app.include_router(volunteers.router, tags=["Volunteers"])
+
 app.include_router(books.router,  tags=["Books"])
+app.include_router(volunteers.router, tags=["Volunteers"])
 app.include_router(stalls.router,  tags=["Stalls"])
 app.include_router(reports.router,  tags=["Reports"])
 

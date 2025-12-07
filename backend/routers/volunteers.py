@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import Select, select
 from backend.database import engine
 from backend.models import Volunteers
 from datetime import date
@@ -18,12 +17,12 @@ class VolunteerRequest(BaseModel):
 def add_volunteer(request: VolunteerRequest):
 
     with Session(engine) as session:
-        vol = Volunteers(vol_name = request.vol_name, vol_join_date = request.vol_join_date)
+        vol = Volunteers(name = request.vol_name, join_date = request.vol_join_date)
         session.add(vol)
         session.commit()
         session.refresh(vol)
 
-    return {"message": f" {vol.vol_name} added, volunteer ID is {vol.id}"}
+    return {"message": f" {vol.name} added, volunteer ID is {vol.id}"}
 
 #API: Make Volunteer A Lead
 @router.post("/make-volunteer-lead")
@@ -38,7 +37,7 @@ def make_volunteer_lead(volunteer_id: int):
         session.commit()
         session.refresh(vol)
 
-    return {"message": f"Volunteer {vol.vol_name} (ID {vol.id}) is now a Lead Volunteer"}
+    return {"message": f"Volunteer {vol.name} (ID {vol.id}) is now a Lead Volunteer"}
 
 #API: Get leads list
 @router.get("/list-leads")
@@ -47,6 +46,6 @@ def list_volunteer_leads():
         leads = session.exec(
             select(Volunteers).where(Volunteers.is_lead == True)
         ).all()
-        return [{"id": v.id,"vol_name": v.vol_name} for v in leads]
+        return [{"id": v.id,"vol_name": v.name} for v in leads]
 
 
