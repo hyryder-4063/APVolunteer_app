@@ -24,10 +24,17 @@ class Volunteers(SQLModel, table=True):
     name: str
     join_date: date = Field(default=date.today())
     is_lead: bool = Field(default=False)
+    default_location_id: int = Field(default = None, foreign_key="location.id")
+
+class Location(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    area: str
+    location: str
+    type: str   #Cafe, park, office, event
 
 class Stalls(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    location: str
+    location_id: int = Field(default = None, foreign_key="location.id")
     date: date
     lead_id: int = Field(foreign_key="volunteers.id")
     is_closed: bool = Field(default=False)

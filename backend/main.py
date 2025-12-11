@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from sqlmodel import SQLModel
 
 from backend.database import engine
-from backend.routers import volunteers, books, stalls, reports
+from backend.routers import volunteers, books, stalls, reports, inventory, analytics
 
 
 # -------------------------------
@@ -39,6 +39,8 @@ app.include_router(books.router,  tags=["Books"])
 app.include_router(volunteers.router, tags=["Volunteers"])
 app.include_router(stalls.router,  tags=["Stalls"])
 app.include_router(reports.router,  tags=["Reports"])
+app.include_router(inventory.router,  tags=["Inventory"])
+app.include_router(analytics.router,  tags=["Analytics"])
 
 
 # -------------------------------

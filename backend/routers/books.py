@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from datetime import date
 from backend.database import engine, Session
 from backend.models import Inventory, Title, Volunteers, InventoryMovement, MovementType
+from collections import OrderedDict
 
 # ----- FastAPI setup -----
 router = APIRouter(prefix="/books")
@@ -35,6 +36,17 @@ def add_new_title(request: AddNewTitleRequest):
 
 
         return {"message": f"Book title '{request.title}' added successfully"}
+
+# --------------------------------------------------------
+#               LIST TITLES
+# --------------------------------------------------------
+@router.get("/list-titles")
+def list_titles():
+    with Session(engine) as session:
+        titles = session.exec(select(Title.title)).all()
+        # extract strings
+        titles_list = [t[0] for t in titles if t[0]]
+        return sorted(set(titles))
 
 
 # --------------------------------------------------------
@@ -101,14 +113,7 @@ def add_books(request: AddBookRequest):
         return {"message": f"{request.units} books of '{request.title}' added successfully, batch: {new_batch.id}"}
 
 
-# --------------------------------------------------------
-#               LIST TITLES
-# --------------------------------------------------------
-@router.get("/list-titles")
-def list_titles():
-    with Session(engine) as session:
-        titles = session.exec(select(Title.title)).all()
-        return sorted(set(titles))
+
 
 
 # --------------------------------------------------------
@@ -151,14 +156,13 @@ from sqlmodel import Session, select
 from backend.database import engine
 from backend.models import Inventory, Volunteers, InventoryMovement, MovementType
 
-router = APIRouter(prefix="/books")
+
 
 
 class AssignBooksRequest(BaseModel):
     volunteer_id: int
     batch_id: int
     units: int
-
 
 @router.post("/assign-books")
 def assign_books(request: AssignBooksRequest):
@@ -214,7 +218,7 @@ class ReturnBooksRequest(BaseModel):
     copies_return: int
 
 @router.post("/return-books")
-def return_books(request: AssignBooksRequest):
+def return_books(request: ReturnBooksRequest):
 
     with (Session(engine) as session):
 
@@ -290,71 +294,3 @@ def return_books(request: AssignBooksRequest):
             "returned_now": to_be_returned,
             "remaining_after": available - to_be_returned
         }
-
-
-
-
-
-# --------------------------------------------------------
-#           VIEW ASSIGNED INVENTORY
-# --------------------------------------------------------
-@router.get("/assigned_books")
-def assigned_books(volunteer_id: int):
-    with (Session(engine) as session):
-
-        movements = session.exec(select(InventoryMovement).where(
-            (InventoryMovement.volunteer_id == volunteer_id) &
-            (InventoryMovement.movement_type ==  MovementType.ASSIGN))
-        ).all()
-
-
-        result = []
-        for move in movements:
-            batch = session.exec(select(Inventory).where(Inventory.id == move.batch_id)).first()
-            title = session.exec(select(Title).where(Title.id == batch.title_id)).first()
-            result.append({
-                "batch_id": batch.id,
-                "title": title.title,
-                "copies_assigned": move.copies_moved,
-                "volunteer_id": volunteer_id,
-            })
-
-        return result
-
-
-# --------------------------------------------------------
-#           UNSOLD INVENTORY
-# --------------------------------------------------------
-
-
-@router.get("/unsold_inventory")
-def get_unsold_inventory():
-    with Session(engine) as session:
-        batches = session.exec(select(Inventory)).all()
-        respond = []
-
-        for batch in batches:
-            total_copies = batch.copies_total
-
-            moved_copies = session.exec(
-                select(func.sum(InventoryMovement.copies_moved))
-                .where(
-                    InventoryMovement.batch_id == batch.id,
-                    InventoryMovement.movement_type.in_([MovementType.ASSIGN, MovementType.SOLD])
-                )
-            ).first() or 0
-
-            title_obj = session.get(Title, batch.title_id)
-            title_name = title_obj.title if title_obj else "Unknown Title"
-
-            available = total_copies - (moved_copies or 0)
-            if available <= 0:
-                continue  # skip batches with no available copies
-
-            respond.append({
-                "title": title_name,
-                "batch_id": batch.id,
-                "available": available
-            })
-
-        return respond

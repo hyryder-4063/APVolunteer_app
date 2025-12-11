@@ -5,14 +5,84 @@ from pydantic import BaseModel
 from typing import List
 from datetime import date
 
-from backend.models import Stalls, Volunteers, Inventory, StallVolunteers, InventoryMovement, MovementType, Title
+from backend.models import Stalls, Volunteers, Inventory, StallVolunteers, InventoryMovement, MovementType, Title, \
+    Location
 from backend.database import Session, engine
 
 router = APIRouter(prefix="/stalls")
 
 
+class LocationRequest(BaseModel):
+    area: str
+    location: str
+    type: str
+
+@router.post("/add-location")
+def add_location(request: LocationRequest):
+    with (Session(engine) as session):
+        #check if location is new
+        area = request.area.lower().strip()
+        location = request.location.lower().strip()
+        location_exists = session.exec(select(Location).where(
+            (Location.area == area) & (Location.location == location)
+            )
+        ).first()
+        if location_exists:
+            return  location
+
+        loc = Location(area=request.area, location=request.location, type=request.type.lower().strip())
+        session.add(loc)
+        session.commit()
+        session.refresh(loc)
+        return loc
+
+@router.get("/locations")
+def get_locations():
+    with (Session(engine)) as session:
+        loc = session.exec(select(Location)).all()
+        return[
+        {
+            "id": l.id,
+            "area": l.area,
+            "location": l.location,
+            "type": l.type
+
+        }
+        for l in loc
+        ]
+
+class DefaultLocationRequest(BaseModel):
+    volunteer_id: str
+    location_id: int
+
+
+@router.post("/default-location")
+def default_location(request: DefaultLocationRequest):
+    with (Session(engine)) as session:
+        #check if volunteer exists
+        v = session.get(Volunteers, request.volunteer_id)
+        if not v:
+            raise HTTPException(404, "Volunteer not found")
+
+        loc = session.get(Location, request.location_id)
+        if not loc:
+            raise HTTPException(404, "Location not found")
+
+        v.default_location_id = request.location_id
+        session.commit()
+        session.refresh(v)
+
+        return {
+            "message": "Default location updated",
+            "location_id": v.default_location_id,
+            "volunteer_id": v.id,
+
+        }
+
+
+
 class StallRequest(BaseModel):
-    stall_location: str
+    location_id: int
     stall_date: date
     volunteer_ids: List[int]
     volunteer_lead_id: int
@@ -22,18 +92,35 @@ class StallRequest(BaseModel):
 @router.post("/create")
 def create_stall(request: StallRequest):
 
+    # ============================
+    # DEBUG LOGGING START
+    # ============================
+    print("\n\n===== DEBUG: /stall/create CALLED =====")
+    print("RAW REQUEST OBJECT:", request)
+    print("location_id:", request.location_id)
+    print("stall_date:", request.stall_date)
+    print("volunteer_ids:", request.volunteer_ids)
+    print("volunteer_lead_id:", request.volunteer_lead_id)
+    print("========================================\n")
+    # ============================
+    # DEBUG LOGGING END
+    # ============================
+
     with (Session(engine) as session):
 
         # -------------------------
         # 1. Validate volunteer IDs
         # -------------------------
+        print("DEBUG: Validating volunteer IDs…")   # DEBUG
         volunteer_names = []
         valid_vol_ids = session.exec(
             select(Volunteers).where(Volunteers.id.in_(request.volunteer_ids))
         ).all()
 
+        print("DEBUG: valid_vol_ids fetched:", valid_vol_ids)  # DEBUG
 
         if len(valid_vol_ids) != len(request.volunteer_ids):
+            print("DEBUG ERROR: Invalid volunteer IDs!")  # DEBUG
             raise HTTPException(
                 status_code=400,
                 detail="One or more volunteer IDs do not exist"
@@ -41,40 +128,57 @@ def create_stall(request: StallRequest):
         for v in valid_vol_ids:
             volunteer_names.append(v.name)
 
-        # 2.Check lead volunteer exists
+        # 2. Validate lead
+        print("DEBUG: Validating lead volunteer…")  # DEBUG
         lead = session.get(Volunteers, request.volunteer_lead_id)
+        print("DEBUG: Lead fetched =", lead)  # DEBUG
         if not lead:
+            print("DEBUG ERROR: Lead not found!")  # DEBUG
             raise HTTPException(
                 status_code=404,
                 detail="Lead volunteer ID does not exist"
             )
 
         # -------------------------
-        # 3. Create stall entry
+        # 3. Validate location id
         # -------------------------
+        print("DEBUG: Validating location…")  # DEBUG
+        loc = session.get(Location, request.location_id)
+        print("DEBUG: Location fetched =", loc)  # DEBUG
+        if not loc:
+            print("DEBUG ERROR: Location not found!")  # DEBUG
+            raise HTTPException(status_code=404, detail="Location not found")
+
+        # -------------------------
+        # 4. Create stall
+        # -------------------------
+        print("DEBUG: Creating stall record…")  # DEBUG
         stall = Stalls(
-            location=request.stall_location,
+            location_id=request.location_id,
             date=request.stall_date,
             lead_id=request.volunteer_lead_id
         )
         session.add(stall)
         session.flush()
-
+        print("DEBUG: Stall created with ID =", stall.id)  # DEBUG
 
         # -------------------------
-        # 4. Add volunteers to junction table
+        # 5. Add volunteers to junction table
         # -------------------------
+        print("DEBUG: Adding volunteers to StallVolunteers…")  # DEBUG
         for volunteer in request.volunteer_ids:
+            print(f"DEBUG: Adding volunteer {volunteer} → stall {stall.id}")  # DEBUG
             link = StallVolunteers(stall_id=stall.id, volunteer_id=volunteer)
             session.add(link)
 
         session.commit()
         session.refresh(stall)
+        print("DEBUG: Commit complete. Stall saved.")  # DEBUG
 
         return {
             "message": "Stall created",
             "stall_id": stall.id,
-            "stall_location": stall.location,
+            "stall_location": stall.location_id,
             "stall_date": stall.date,
             "volunteer_ids": request.volunteer_ids,
             "volunteer names": volunteer_names,
@@ -242,7 +346,7 @@ def monthly_stall_list():
 
             monthly_map[month_key].append({
                 "stall_id": s.id,
-                "stall_location": s.location,
+                "stall_location": s.location_id,
                 "stall_date": str(s.date),
                 "lead_volunteer_id": s.lead_id,
             })
@@ -256,12 +360,12 @@ from collections import defaultdict
 def stall_performance(stall_id: int):
     with Session(engine) as session:
 
-        # 1. Fetch stall
+        # 1️⃣ Fetch stall
         stall = session.get(Stalls, stall_id)
         if not stall:
             raise HTTPException(status_code=404, detail="Stall not found")
 
-        # 2. Fetch volunteers
+        # 2️⃣ Fetch volunteers
         vol = session.exec(
             select(Volunteers)
             .join(StallVolunteers, StallVolunteers.volunteer_id == Volunteers.id)
@@ -269,30 +373,30 @@ def stall_performance(stall_id: int):
         ).all()
         volunteer_names = [v.name for v in vol]
 
-        # 3. Fetch inventory movements for this stall
+        # 3️⃣ Fetch inventory movements for this stall
         movements = session.exec(
             select(InventoryMovement)
             .where(InventoryMovement.stall_id == stall_id)
         ).all()
 
-        # 4. Aggregate by title + batch
+        # 4️⃣ Aggregate by title + batch
         table = []
         for m in movements:
             if m.movement_type != MovementType.SOLD:
                 continue  # only count sold copies
 
             batch = session.get(Inventory, m.batch_id)
-            title_obj = session.get(Title, batch.title_id)
+            title_obj = session.get(Title, batch.title_id) if batch else None
             title_name = title_obj.title if title_obj else "Unknown Title"
 
             table.append({
                 "Title": title_name,
-                "Batch ID": batch.id,
+                "Batch ID": batch.id if batch else None,
                 "Sold": m.copies_moved,
                 "Revenue": round(m.copies_moved * m.selling_price_per_copy, 2)
             })
 
-        # Optional: combine multiple sales of same batch
+        # Combine multiple sales of same batch
         combined = defaultdict(lambda: {"Sold": 0, "Revenue": 0})
         for row in table:
             key = (row["Title"], row["Batch ID"])
@@ -304,10 +408,15 @@ def stall_performance(stall_id: int):
             for k, v in combined.items()
         ]
 
+        # 5️⃣ Safe stall location handling
+        location = session.get(Location, stall.location_id) if stall.location_id else None
+        stall_location_name = location.area if location and location.area else "Location not entered"
+
         return {
             "stall": {
                 "stall_id": stall.id,
-                "stall_location": stall.location,
+                "stall_location_id": stall.location_id,
+                "stall_location": stall_location_name,
                 "stall_date": str(stall.date),
                 "volunteers": volunteer_names
             },
